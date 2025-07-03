@@ -1,0 +1,9 @@
+com/qyh/agent/MethodStack.class
+com/qyh/agent/Method.class
+com/qyh/app/Main$B.class
+com/qyh/app/Main$A.class
+com/qyh/agent/ClassTransformer$1.class
+com/qyh/app/Main.class
+com/qyh/agent/ClassTransformer.class
+com/qyh/agent/MethodStack$1.class
+com/qyh/agent/ClassAgent.class

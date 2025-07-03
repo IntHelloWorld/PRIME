@@ -1,0 +1,9 @@
+dataset/bugInfo
+dataset/buggy_codebase
+DebugResult
+EvaluationResult
+.vscode
+utils
+test
+config
+__pycache__/

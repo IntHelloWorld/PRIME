@@ -1,0 +1,4 @@
+javassist.CtMethod@44a4fe33[public static main ([Ljava/lang/String;)V]
+javassist.CtMethod@bb758a02[public static add (II)I]
+javassist.CtMethod@457afa51[public static minus (II)I]
+javassist.CtMethod@67d48cc[public run ()V]
