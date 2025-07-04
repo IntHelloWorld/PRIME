@@ -29,14 +29,14 @@ def main(proj, bug_id, config_file):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the debug agent")
     parser.add_argument(
-        "--project", type=str, help="project name", default="JacksonDatabind"
+        "--project", type=str, help="project name", default="Mockito"
     )
-    parser.add_argument("--bugID", type=str, help="bug id", default="1")
+    parser.add_argument("--bugID", type=str, help="bug id", default="5")
     parser.add_argument(
         "--config",
         type=str,
         help="config file",
-        default="config/default.yml",
+        default="config/default_new.yml",
     )
     args = parser.parse_args()
     main(args.project, args.bugID, args.config)

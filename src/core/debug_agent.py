@@ -88,6 +88,9 @@ class DebugAgent:
                     r.get()
                 except Exception as e:
                     self.bug_info.logger.error(f"Error in subprocess: {e}")
+                    import traceback
+
+                    traceback.print_exc()
 
     def run_singleprocess(self):
         for _, debug_state in self.debug_states.items():
@@ -156,98 +159,6 @@ class DebugAgent:
                 )
             )
         return debug_inputs
-
-    # def combine_test_case_results(self, inputs: List[DebugInput]):
-    #     """Combine the results for all test cases to generate a final suspicious methods rank list"""
-    #     # check if the debug report for all test cases are generated
-    #     for input in inputs:
-    #         search_file = input.output_path / "search.json"
-    #         if not search_file.exists():
-    #             raise Exception(
-    #                 f"Search result file {search_file} is not found."
-    #             )
-    #         if not json.loads(search_file.read_text())["debug_report"]:
-    #             raise Exception(
-    #                 f"Search result file {search_file} does not contain debug report."
-    #             )
-
-    #     # check if already generated the final report
-    #     result_file: Path = self.bug_info.res_path / "debug_result.json"
-    #     if result_file.exists():
-    #         return
-
-    #     llm = self.llm_backend(
-    #         api_key=self.bug_info.config.search_model.api_key,
-    #         base_url=self.bug_info.config.search_model.base_url,
-    #     )
-    #     memory = Memory(
-    #         system_prompt=SUMMARIZE_SYSTEM_PROMPT,
-    #         model_name=self.bug_info.config.search_model.model,
-    #     )
-    #     memory.add_message(
-    #         {
-    #             "role": "user",
-    #             "content": self.get_result_report(inputs),
-    #         }
-    #     )
-
-    #     result = None
-    #     combined_graph_file = self.bug_info.bug_path / "combined_graph.pkl"
-    #     with combined_graph_file.open("rb") as f:
-    #         combined_graph = pickle.load(f)
-    #     combined_searcher = RepoSearcher(combined_graph)
-    #     while True:
-    #         response = llm.call(
-    #             messages=memory.get_messages(),
-    #             model=self.bug_info.config.search_model.model,
-    #             **self.bug_info.config.search_model.llm_args.asdict(),
-    #         )
-
-    #         message = self.llm_backend.get_msg(response)
-    #         message_text = self.llm_backend.get_msg_text(message)
-
-    #         memory.add_message({"role": "assistant", "content": message_text})
-    #         result = extract_json_block(message_text)
-    #         if result is None:
-    #             error_message = f"Reponse format error, please return a JSON format verification result wrapped with ```json...``` block."
-    #             memory.add_message(
-    #                 {"role": "user", "content": error_message}, "retry"
-    #             )
-    #             continue
-
-    #         suspicious_methods = json.loads(result)
-    #         method_ids = [m["method_id"] for m in suspicious_methods]
-    #         false_ids = []
-    #         for method_id in method_ids:
-    #             if combined_searcher.get_method(method_id) is None:
-    #                 false_ids.append(method_id)
-    #         if false_ids:
-    #             possible_ids = combined_searcher.get_possible_method_ids(
-    #                 false_ids
-    #             )
-    #             if not possible_ids:
-    #                 possible_ids = "No possible method IDs found."
-    #             error_message = (
-    #                 "The following method IDs in your result are not found:\n"
-    #                 + json.dumps(false_ids)
-    #                 + "\n\nHere are some possible method IDs:\n"
-    #                 + json.dumps(possible_ids)
-    #                 + "\n\nPlease correct the method IDs or delete the non-existent method IDs and regenerate the JSON format verification result."
-    #             )
-    #             memory.add_message(
-    #                 {"role": "user", "content": error_message}, "retry"
-    #             )
-    #             continue
-
-    #         input_tokens, output_tokens = self.llm_backend.get_tokens(response)
-    #         memory.add_cost(output_tokens, input_tokens)
-    #         break
-
-    #     result_dict = {
-    #         "results": suspicious_methods,
-    #         "memory": memory.serialize(),
-    #     }
-    #     result_file.write_text(json.dumps(result_dict, indent=4))
 
     def get_debug_result(self):
         debug_result = {}

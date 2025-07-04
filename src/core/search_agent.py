@@ -7,7 +7,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Dict, List
 
 from anthropic.types import ToolUseBlock
-from openai.types.chat import ChatCompletionMessageToolCall
+from openai.types.chat import (
+    ChatCompletionMessage,
+    ChatCompletionMessageToolCall,
+)
 
 from src.config import BugInfo
 from src.core.llm_backend import AnthropicBackend, LLMBackend, OpenAIBackend
@@ -63,7 +66,7 @@ DEFAULT_FUNCTION_NO_THOUGHT = {
 
 
 @dataclass
-class ProcessState:
+class ThreadState:
     input: SearchInput
     llm: LLMBackend
     memory: Memory
@@ -82,22 +85,22 @@ class SearchAgent:
         self.bug_info = bug_info
         self.searcher = searcher
 
-        self.max_parallel = self.bug_info.config.hyper.max_parallel_tool_calls
+        self.branch_count = self.bug_info.config.hyper.branch_count
         self.max_paths = self.bug_info.config.hyper.max_search_paths
         self.cur_paths = 1
 
         self.max_tool_calls = bug_info.config.hyper.max_tool_calls
-        if self.max_parallel > 1:
+        if self.branch_count > 1:
             self.debug_prompt = DEBUGGING_PROMPT_PARALLEL.format(
                 max_tool_calls=self.max_tool_calls,
             )
-        elif self.max_parallel == 1:
+        elif self.branch_count == 1:
             self.debug_prompt = DEBUGGING_PROMPT.format(
                 max_tool_calls=self.max_tool_calls,
             )
         else:
             raise ValueError(
-                f"Invalid max_parallel_tool_calls:{self.max_parallel} setting in the config. It should be greater than 0."
+                f"Invalid branch_count:{self.branch_count} setting in the config. It should be greater than 0."
             )
         self.default_function = DEFAULT_FUNCTION
 
@@ -118,37 +121,33 @@ class SearchAgent:
             self.llm_backend = AnthropicBackend
             self.tool_set = SEARCH_AGENT_TOOLS_ANTHROPIC
 
-        self.processes: Dict[int, ProcessState] = {}
+        self.threads: Dict[int, ThreadState] = {}
         self.futures: List[Future] = []
-        self.process_counter = 0
-        self.process_lock = threading.Lock()
+        self.thread_counter = 0
+        self.thread_lock = threading.Lock()
         self.search_workers = bug_info.config.hyper.search_workers
         self.thread_pool = ThreadPoolExecutor(
             max_workers=self.search_workers,
         )
         self.futures = []
 
-    def create_process(
-        self, input: SearchInput, parent_id=None
-    ) -> ProcessState:
-        with self.process_lock:
-            process_id = self.process_counter
+    def create_thread(self, input: SearchInput, parent_id=None) -> ThreadState:
+        with self.thread_lock:
+            thread_id = self.thread_counter
             if parent_id is not None:
-                parent_process = self.processes[parent_id]
-                self.processes[process_id] = ProcessState(
+                parent_thread = self.threads[parent_id]
+                self.threads[thread_id] = ThreadState(
                     input=input,
                     llm=self.llm_backend(
                         api_key=self.bug_info.config.search_model.api_key,
                         base_url=self.bug_info.config.search_model.base_url,
                     ),
-                    memory=copy.deepcopy(parent_process.memory),
-                    id=f"{parent_process.id}-{process_id}",
-                    function_calls=copy.deepcopy(
-                        parent_process.function_calls
-                    ),
+                    memory=copy.deepcopy(parent_thread.memory),
+                    id=f"{parent_thread.id}-{thread_id}",
+                    function_calls=copy.deepcopy(parent_thread.function_calls),
                 )
             else:
-                self.processes[process_id] = ProcessState(
+                self.threads[thread_id] = ThreadState(
                     input=input,
                     llm=self.llm_backend(
                         api_key=self.bug_info.config.search_model.api_key,
@@ -158,32 +157,32 @@ class SearchAgent:
                         self.debug_prompt,
                         self.bug_info.config.search_model.model,
                     ),
-                    id=str(process_id),
+                    id=str(thread_id),
                 )
-            self.process_counter += 1
-            return process_id
+            self.thread_counter += 1
+            return thread_id
 
     def save_memory(self):
         memory_cache = {}
-        for process in self.processes.values():
-            memory_cache[process.id] = {
-                "memory": process.memory.serialize(),
-                "debug_report": process.memory.get_debug_report(),
+        for thread in self.threads.values():
+            memory_cache[thread.id] = {
+                "memory": thread.memory.serialize(),
+                "debug_report": thread.memory.get_debug_report(),
             }
         # save the memory cache to a file
-        search_file = process.input.output_path / "search.json"
+        search_file = thread.input.output_path / "search.json"
         search_file.write_text(json.dumps(memory_cache, indent=2))
         self.bug_info.logger.info(f"Save search memory cache to {search_file}")
 
-    def load_memory(self, process: ProcessState):
+    def load_memory(self, thread: ThreadState):
         # load the memory cache from a file
-        search_file = process.input.output_path / "search.json"
+        search_file = thread.input.output_path / "search.json"
         memory_cache = json.loads(search_file.read_text())
-        process_id = list(memory_cache.keys())[0]
+        thread_id = list(memory_cache.keys())[0]
 
         cached_messages = []
         function_calls = []
-        for message in memory_cache[process_id]["memory"]["messages"]:
+        for message in memory_cache[thread_id]["memory"]["messages"]:
             if "tool_calls" in message:
                 function_name = message["tool_calls"][0]["function"]["name"]
                 if function_name == "nominate_suspicious_method":
@@ -191,10 +190,10 @@ class SearchAgent:
                 function_calls.append(function_name)
             cached_messages.append(message)
 
-        process.id = process_id
-        process.function_calls = function_calls
+        thread.id = thread_id
+        thread.function_calls = function_calls
         for cached_message in cached_messages:
-            process.memory.add_message(
+            thread.memory.add_message(
                 self.llm_backend.recover_msg(cached_message)
             )
 
@@ -202,12 +201,12 @@ class SearchAgent:
             f"Load search memory cache from {search_file}"
         )
 
-    def init_memory(self, input: SearchInput, process_id: str) -> None:
-        process = self.processes[process_id]
+    def init_memory(self, input: SearchInput, thread_id: str) -> None:
+        thread = self.threads[thread_id]
 
         if self.bug_info.config.hyper.use_ablation:
             # load the memory cache from a file
-            self.load_memory(process)
+            self.load_memory(thread)
             return
 
         default_messages = [
@@ -223,18 +222,18 @@ class SearchAgent:
             },
         ]
         for message in default_messages:
-            process.memory.add_message(message)
+            thread.memory.add_message(message)
 
-        process.function_calls.append("get_covered_classes")
+        thread.function_calls.append("get_covered_classes")
 
     def run(self, input: SearchInput):
-        entry_process_id = self.create_process(input)
-        self.init_memory(input, entry_process_id)
+        entry_thread_id = self.create_thread(input)
+        self.init_memory(input, entry_thread_id)
 
         entry_future = self.thread_pool.submit(
-            self.run_process, entry_process_id
+            self.run_thread, entry_thread_id
         )
-        entry_future.process_id = entry_process_id
+        entry_future.thread_id = entry_thread_id
         self.futures.append(entry_future)
 
         # wait for all futures to finish
@@ -248,14 +247,18 @@ class SearchAgent:
                 result = future.result()
             except Exception as e:
                 self.bug_info.logger.error(
-                    f"<{self.processes[future.process_id].input.test_name}> - encountered an exception: {e}",
+                    (
+                        f"<{self.threads[future.thread_id].input.test_name}> "
+                        f"- encountered an exception: {e}"
+                    ),
                     exc_info=True,
                 )
                 has_exception = True
 
         if has_exception:
             raise Exception(
-                "Search agent encountered exceptions. Please check the logs for details."
+                "Search agent encountered exceptions. "
+                "Please check the logs for details."
             )
         self.save_memory()
 
@@ -269,169 +272,219 @@ class SearchAgent:
         function_response = function_to_call(**function_args)
         return function_response
 
-    def process_function_calls(
+    def remove_duplicate_msg(
         self,
-        process_id: int,
-        message: ChatCompletionMessageToolCall | ToolUseBlock,
+        messages: List[ChatCompletionMessage],
+    ) -> List[ChatCompletionMessage]:
+        """
+        Remove duplicate tool calls from the messages,
+        and keep the messages without tool calls.
+        """
+        seen_tool_calls = set()
+        has_end_msg = False  # We only need one message without a tool call
+        unique_messages = []
+        for message in messages:
+            tool_call = self.llm_backend.get_tool_call(message)
+            if tool_call:
+                function = tool_call.function
+                function_str = str(function)
+                if function_str in seen_tool_calls:
+                    # Skip duplicate tool calls
+                    continue
+                seen_tool_calls.add(function_str)
+                unique_messages.append(message)
+            else:
+                if not has_end_msg:
+                    # Keep messages without tool calls
+                    unique_messages.append(message)
+                    has_end_msg = True
+        return unique_messages
+
+    def extend_nodes(
+        self,
+        thread_id: int,
+        messages: List[ChatCompletionMessage],
     ) -> None:
-        tool_calls = self.llm_backend.get_tool_calls(message)
+        """Extend the search paths based on the messages."""
+        messages = self.remove_duplicate_msg(messages)
 
         # check if reached the maximum number of search paths
-        with self.process_lock:
-            max_parallel = self.max_parallel
+        with self.thread_lock:
+            max_parallel = self.branch_count
             if self.cur_paths >= self.max_paths:
-                # do not create new processes
+                # do not create new threads
                 max_parallel = 1
             else:
-                max_new_paths = min(len(tool_calls), self.max_parallel) - 1
+                max_new_paths = min(len(messages), self.branch_count) - 1
                 max_parallel = (
                     min(max_new_paths, self.max_paths - self.cur_paths) + 1
                 )
             if max_parallel > 1:
                 self.cur_paths += max_parallel - 1
 
-        for i in range(len(tool_calls[:max_parallel])):
-            # create a new process for each tool call
-            new_process_id = self.create_process(
-                input=copy.deepcopy(self.processes[process_id].input),
-                parent_id=process_id,
-            )
-            single_tool_call_message = (
-                self.llm_backend.get_single_tool_call_msg(message, i)
-            )
-            future = self.thread_pool.submit(
-                self.run_process,
-                new_process_id,
-                single_tool_call_message,
-            )
-            future.process_id = new_process_id
-            self.futures.append(future)
+        all_need_extend = True
+        for message in messages[:max_parallel]:
+            tool_call = self.llm_backend.get_tool_call(message)
 
-        with self.process_lock:
-            # remove the parent process and its futures
-            self.processes.pop(process_id)
-            for future in self.futures:
-                if future.process_id == process_id:
-                    self.futures.remove(future)
-
-    def run_process(self, process_id: str, single_tool_call_msg=None) -> None:
-        process = self.processes[process_id]
-        message_text = None
-
-        if single_tool_call_msg:
-            message_text = self.llm_backend.get_msg_text(single_tool_call_msg)
-            tool_call = self.llm_backend.get_tool_calls(single_tool_call_msg)[
-                0
-            ]
-            tool_call_name = self.llm_backend.get_tool_name(tool_call)
-            self.bug_info.logger.info(
-                f"{self.bug_info.bug_name} - <{process.input.test_name}> - Process {process.id} - call function {tool_call_name}"
-            )
-
-            try:
-                tool_call_result = self.execute_function(tool_call)
-                process.function_calls.append(
-                    self.llm_backend.get_tool_name(tool_call)
+            if tool_call:
+                # create a new thread for each message
+                new_thread_id = self.create_thread(
+                    input=copy.deepcopy(self.threads[thread_id].input),
+                    parent_id=thread_id,
                 )
-            except Exception as e:
-                self.bug_info.logger.error(
-                    f"{self.bug_info.bug_name} - <{process.input.test_name}> - Process {process.id} - Error when executing function {tool_call}: {str(e)}"
+                future = self.thread_pool.submit(
+                    self.run_thread,
+                    new_thread_id,
+                    message,
                 )
-                tool_call_result = "Function cannot be called with the given arguments. Please try something else."
-                process.function_calls.append("retry")
-            process.memory.add_message(single_tool_call_msg)
-            process.memory.add_message(
-                self.llm_backend.get_tool_result_msg(
-                    tool_call, tool_call_result
-                )
-            )
+                future.thread_id = new_thread_id
+                self.futures.append(future)
+            else:
+                all_need_extend = False
+                self.run_fault_localization(thread_id, message)
 
-        # check if the process has reached the maximum number of tool calls
-        if process.num_function_calls >= self.max_tool_calls:
-            process.memory.add_message(
-                {
-                    "role": "assistant",
-                    "content": REACH_MAX_TOOL_CALLS,
-                }
+        # if all paths need to be extended,
+        # remove the parent thread and its futures
+        if all_need_extend:
+            with self.thread_lock:
+                # remove the parent thread and its futures
+                self.threads.pop(thread_id)
+                for future in self.futures:
+                    if future.thread_id == thread_id:
+                        self.futures.remove(future)
+
+    def run_function_calls(
+        self, thread_id: str, message: ChatCompletionMessage
+    ) -> None:
+        thread = self.threads[thread_id]
+        tool_call = self.llm_backend.get_tool_call(message)
+        tool_call_name = self.llm_backend.get_tool_name(tool_call)
+        self.bug_info.logger.info(
+            f"{self.bug_info.bug_name} "
+            f"- <{thread.input.test_name}> "
+            f"- thread {thread.id} "
+            f"- call function {tool_call_name}"
+        )
+
+        try:
+            tool_call_result = self.execute_function(tool_call)
+            thread.function_calls.append(
+                self.llm_backend.get_tool_name(tool_call)
             )
-            tool_calls = []
+        except Exception as e:
+            self.bug_info.logger.error(
+                f"{self.bug_info.bug_name} "
+                f"- <{thread.input.test_name}> "
+                f"- thread {thread.id} "
+                f"- Error when executing function {tool_call}: {str(e)}"
+            )
+            tool_call_result = (
+                "Function cannot be called with the given arguments. "
+                "Please try something else."
+            )
+            thread.function_calls.append("retry")
+        thread.memory.add_message(message)
+        thread.memory.add_message(
+            self.llm_backend.get_tool_result_msg(tool_call, tool_call_result)
+        )
+
+    def run_fault_localization(
+        self, thread_id: str, message: ChatCompletionMessage
+    ) -> None:
+        thread = self.threads[thread_id]
+        self.bug_info.logger.info(
+            f"{self.bug_info.bug_name} "
+            f"- <{thread.input.test_name}> "
+            f"- thread {thread.id} - start fault localization"
+        )
+
+        message_text = self.llm_backend.get_msg_text(message)
+        terminate_message = {
+            "role": "assistant",
+            "content": message_text,
+        }
+        thread.memory.add_message(terminate_message)
+
+        # summarize the debugging report
+        summarization_message = {
+            "role": "user",
+            "content": SUMMARIZATION_PROMPT,
+        }
+        thread.memory.add_message(summarization_message)
+        summary_response = thread.llm.call(
+            messages=thread.memory.get_messages(),
+            model=self.bug_info.config.search_model.model,
+            **self.bug_info.config.search_model.llm_args.asdict(),
+        )
+        summary_message = self.llm_backend.get_msg(summary_response)
+        summary_text = self.llm_backend.get_msg_text(summary_message)
+        input_tokens, output_tokens = self.llm_backend.get_tokens(
+            summary_response
+        )
+        thread.memory.add_cost(output_tokens, input_tokens)
+        thread.memory.add_message(
+            {
+                "role": "assistant",
+                "content": summary_text,
+            }
+        )
+
+        # get the bug localization result
+        fault_localization_message = {
+            "role": "user",
+            "content": FAULT_LOCALIZATION_PROMPT,
+        }
+        thread.memory.add_message(fault_localization_message)
+        fl_response = thread.llm.call(
+            messages=thread.memory.get_messages(),
+            model=self.bug_info.config.search_model.model,
+            **self.bug_info.config.search_model.llm_args.asdict(),
+        )
+        fl_message = self.llm_backend.get_msg(fl_response)
+        fl_result_text = self.llm_backend.get_msg_text(fl_message)
+        input_tokens, output_tokens = self.llm_backend.get_tokens(fl_response)
+        thread.memory.add_cost(output_tokens, input_tokens)
+        thread.memory.add_message(
+            {
+                "role": "assistant",
+                "content": fl_result_text,
+            }
+        )
+
+    def run_thread(
+        self, thread_id: str, message: ChatCompletionMessage = None
+    ) -> None:
+        thread = self.threads[thread_id]
+
+        if message:
+            self.run_function_calls(thread_id, message)
+
+        if thread.num_function_calls >= self.max_tool_calls:
+            # if the thread has reached the maximum number of tool calls,
+            # return a handmade message
             self.bug_info.logger.debug(
-                f"{self.bug_info.bug_name} - <{process.input.test_name}> - Process {process.id} - reached max tool calls"
+                f"{self.bug_info.bug_name} "
+                f"- <{thread.input.test_name}> "
+                f"- Process {thread.id} - reached max tool calls"
             )
+            end_msg = ChatCompletionMessage(
+                role="assistant",
+                content=REACH_MAX_TOOL_CALLS,
+            )
+            messages = [end_msg]
         else:
-            # interact with the LLM
-            messages = process.memory.get_messages()
-            response = process.llm.call(
-                messages=messages,
+            # if the thread has not reached the maximum number of tool calls,
+            # continue the search
+            response = thread.llm.call(
+                messages=thread.memory.get_messages(),
                 tools=self.tool_set,
                 model=self.bug_info.config.search_model.model,
+                n=self.branch_count,
+                parallel_tool_calls=False,
                 **self.bug_info.config.search_model.llm_args.asdict(),
             )
-            message = self.llm_backend.get_msg(response)
-            message_text = self.llm_backend.get_msg_text(message)
-            tool_calls = self.llm_backend.get_tool_calls(message)
-            if tool_calls:
-                input_tokens, output_tokens = self.llm_backend.get_tokens(
-                    response
-                )
-                process.memory.add_cost(output_tokens, input_tokens)
+            messages = self.llm_backend.get_msgs(response)
+            input_tokens, output_tokens = self.llm_backend.get_tokens(response)
+            thread.memory.add_cost(output_tokens, input_tokens)
 
-        if tool_calls:
-            self.process_function_calls(process_id, message)
-        else:
-            self.bug_info.logger.info(
-                f"{self.bug_info.bug_name} - <{process.input.test_name}> - Process {process.id} - start fault localization"
-            )
-            terminate_message = {
-                "role": "assistant",
-                "content": message_text,
-            }
-            process.memory.add_message(terminate_message)
-
-            # summarize the debugging report
-            summarization_message = {
-                "role": "user",
-                "content": SUMMARIZATION_PROMPT,
-            }
-            process.memory.add_message(summarization_message)
-            summary_response = process.llm.call(
-                messages=process.memory.get_messages(),
-                model=self.bug_info.config.search_model.model,
-                **self.bug_info.config.search_model.llm_args.asdict(),
-            )
-            summary_message = self.llm_backend.get_msg(summary_response)
-            summary_text = self.llm_backend.get_msg_text(summary_message)
-            input_tokens, output_tokens = self.llm_backend.get_tokens(
-                summary_response
-            )
-            process.memory.add_cost(output_tokens, input_tokens)
-            process.memory.add_message(
-                {
-                    "role": "assistant",
-                    "content": summary_text,
-                }
-            )
-
-            # get the bug localization result
-            fault_localization_message = {
-                "role": "user",
-                "content": FAULT_LOCALIZATION_PROMPT,
-            }
-            process.memory.add_message(fault_localization_message)
-            fl_response = process.llm.call(
-                messages=process.memory.get_messages(),
-                model=self.bug_info.config.search_model.model,
-                **self.bug_info.config.search_model.llm_args.asdict(),
-            )
-            fl_message = self.llm_backend.get_msg(fl_response)
-            fl_result_text = self.llm_backend.get_msg_text(fl_message)
-            input_tokens, output_tokens = self.llm_backend.get_tokens(
-                fl_response
-            )
-            process.memory.add_cost(output_tokens, input_tokens)
-            process.memory.add_message(
-                {
-                    "role": "assistant",
-                    "content": fl_result_text,
-                }
-            )
+        self.extend_nodes(thread_id, messages)

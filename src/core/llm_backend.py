@@ -100,6 +100,10 @@ class OpenAIBackend(LLMBackend):
         return response
 
     @staticmethod
+    def get_msgs(response: ChatCompletion):
+        return [c.message for c in response.choices]
+
+    @staticmethod
     def get_msg(response: ChatCompletion):
         return response.choices[0].message
 
@@ -116,6 +120,15 @@ class OpenAIBackend(LLMBackend):
     ) -> List[ChatCompletionMessageToolCall]:
         try:
             return msg.tool_calls
+        except Exception:
+            return None
+
+    @staticmethod
+    def get_tool_call(
+        msg: ChatCompletionMessage,
+    ) -> ChatCompletionMessageToolCall:
+        try:
+            return msg.tool_calls[0]
         except Exception:
             return None
 
