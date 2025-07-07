@@ -49,6 +49,11 @@ class Memory:
         self.retry_msgs = []
         self.model_name = model_name
         self.costs = []
+        self.purne_info = {
+            "purned": False,
+            "purne_score": 1,
+            "purne_reason": [],
+        }
 
     def add_message(self, message, type="normal"):
         my_msg = MyMessage(message, type)
@@ -98,7 +103,31 @@ class Memory:
             "all_in_tokens": sum(c["prompt_tokens"] for c in self.costs),
             "all_out_tokens": sum(c["completion_tokens"] for c in self.costs),
             "money": sum([c["cost"] for c in self.costs]),
+            "purne_info": self.purne_info,
         }
+
+    def to_debug_process(self) -> str:
+        debug_process = []
+        messages = [m.dump() for m in self.messages]
+        for message in messages[2:]:
+            if "tool_calls" in message:
+                debug_process.append(
+                    {
+                        "role": message["role"],
+                        "content": message["content"],
+                        "tool_calls": message["tool_calls"],
+                    }
+                )
+            elif message["role"] == "tool":
+                debug_process.append(
+                    {
+                        "role": message["role"],
+                        "content": message["content"],
+                    }
+                )
+            else:
+                debug_process.append(message)
+        return json.dumps(debug_process, indent=2)
 
     def in_tokens_cost(self, tokens: int):
         return tokens / 1000000 * PRICE_PER_MILLION_TOKENS[self.model_name][0]

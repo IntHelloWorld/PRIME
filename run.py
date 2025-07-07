@@ -36,7 +36,7 @@ if __name__ == "__main__":
         "--config",
         type=str,
         help="config file",
-        default="config/default_new.yml",
+        default="config/default_new_purne.yml",
     )
     args = parser.parse_args()
     main(args.project, args.bugID, args.config)

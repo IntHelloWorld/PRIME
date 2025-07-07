@@ -335,37 +335,82 @@ NEW_FAULT_LOCALIZATION_PROMPT = """Based on the available information, please li
 REACH_MAX_TOOL_CALLS = """The maximum number of tool calls has been reached, we have to stop the debugging session."""
 
 
-USER_PROMPT = """
-# Test Failure Information
+USER_PROMPT = """# Test Failure Information
 
 The test `{test_name}` failed.
 
 The source code of the failing test method is:
+
 ```java
 {test_code}
 ```
 
 It failed with the following error message and call stack:
-```
+
+```text
 {error_message}
 ```
 """
 
-DEBUGGING_PROMPT_PARALLEL = """
-You are a Software Debugging Assistant. You will be provided with the test failure information and a set of callable functions to help you debug the issue. Your task is to understand the root cause of the bug step-by-step using the callable functions.
+DEBUGGING_PROMPT_PARALLEL = """You are a Software Debugging Assistant. You will be provided with the test failure information and a set of callable functions to help you debug the issue. Your task is to understand the root cause of the bug step-by-step using the callable functions.
 
 NOTE:
 - Explain your analysis and thoughts before each function call you initiate.
 - You have up to {max_tool_calls} chances to call the functions.
-- You can use parallel function calls to explore different perspectives.
 - If you have understood the root cause, please terminate the debugging session by providing a response without any function call.
 """
 
-DEBUGGING_PROMPT = """
-You are a Software Debugging Assistant. You will be provided with the test failure information and a set of callable functions to help you debug the issue. Your task is to understand the root cause of the bug step-by-step using the callable functions.
+DEBUGGING_PROMPT = """You are a Software Debugging Assistant. You will be provided with the test failure information and a set of callable functions to help you debug the issue. Your task is to understand the root cause of the bug step-by-step using the callable functions.
 
 NOTE:
 - Explain your analysis and thoughts before each function call you initiate.
 - You have up to {max_tool_calls} chances to call the functions.
 - If you have understood the root cause, please terminate the debugging session by providing a response without any function call.
+"""
+
+PURNE_PROMPT = """You are an expert software engineer specializing in debugging and code analysis. Your task is to evaluate the reasoning and actions of a Large Language Model (LLM) agent designed for automated fault localization.
+You will be given the details of a failed test case and the step-by-step debugging process the agent has taken so far. This process includes the agent's reasoning, the tools it called, and the outputs from those tools.
+Your goal is to determine if the agent is on a promising path to finding the root cause of the bug. You are not judging the final outcome, as the process is incomplete. Instead, you are evaluating the quality and direction of the debugging process itself.
+
+## Evaluation Criteria
+
+Carefully analyze the agent's debugging process based on the following criteria:
+
+* "YES" (On the right track to success): The agent's actions are logical and directed. The agent is making tangible progress towards identifying the root cause of the bug, or the agent has found clues related to the test failure.
+
+* "NO" (Not on the right track to success): The agent's actions are irrelevant, or inefficient. The agent goes in circles without making tangible progress, or the agent has not found any clues related to the test failure.
+
+## Output Format
+
+You must format your response into two lines as shown below:
+
+Thoughts: <Your brief thoughts and reasoning process for the decision>
+On the right track to success: "YES" or "NO"
+"""
+
+PURNE_USER_PROMPT = """## Test Failure Information
+
+The test `{test_name}` failed.
+
+The source code of the failing test method is:
+
+```java
+{test_code}
+```
+
+It failed with the following error message and call stack:
+
+```text
+{error_message}
+```
+
+## Agent's Debugging Process So Far
+
+The following is the sequence of thoughts, tool calls, and tool outputs from the agent so far:
+
+```json
+{debugging_process}
+```
+
+Based on the information above, please evaluate the fault localization agent's performance.
 """

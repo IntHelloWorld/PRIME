@@ -19,6 +19,8 @@ from src.core.prompt import (
     DEBUGGING_PROMPT,
     DEBUGGING_PROMPT_PARALLEL,
     FAULT_LOCALIZATION_PROMPT,
+    PURNE_PROMPT,
+    PURNE_USER_PROMPT,
     REACH_MAX_TOOL_CALLS,
     SEARCH_AGENT_TOOLS_ANTHROPIC,
     SUMMARIZATION_PROMPT,
@@ -87,6 +89,11 @@ class SearchAgent:
 
         self.branch_count = self.bug_info.config.hyper.branch_count
         self.max_paths = self.bug_info.config.hyper.max_search_paths
+        self.purne_step = self.bug_info.config.hyper.prune_step
+        self.purne_threshold = self.bug_info.config.hyper.prune_threshold
+        self.num_purene_sampling = (
+            self.bug_info.config.hyper.num_purne_sampling
+        )
         self.cur_paths = 1
 
         self.max_tool_calls = bug_info.config.hyper.max_tool_calls
@@ -346,12 +353,18 @@ class SearchAgent:
         # if all paths need to be extended,
         # remove the parent thread and its futures
         if all_need_extend:
-            with self.thread_lock:
-                # remove the parent thread and its futures
-                self.threads.pop(thread_id)
-                for future in self.futures:
-                    if future.thread_id == thread_id:
-                        self.futures.remove(future)
+            self.remove_thread(thread_id)
+
+    def remove_thread(self, thread_id: str) -> None:
+        """
+        Remove a thread and its associated futures.
+        """
+        with self.thread_lock:
+            # remove the parent thread and its futures
+            self.threads.pop(thread_id)
+            for future in self.futures:
+                if future.thread_id == thread_id:
+                    self.futures.remove(future)
 
     def run_function_calls(
         self, thread_id: str, message: ChatCompletionMessage
@@ -451,6 +464,65 @@ class SearchAgent:
             }
         )
 
+    def purne_search_paths(self, thread_id: str):
+        """
+        Prune the search paths based on the current thread's memory.
+        """
+        thread = self.threads[thread_id]
+        self.bug_info.logger.debug(
+            f"{self.bug_info.bug_name} "
+            f"- <{thread.input.test_name}> "
+            f"- Process {thread.id} - start pruning search paths"
+        )
+
+        debugging_process = thread.memory.to_debug_process()
+        input_messages = [
+            {"role": "system", "content": PURNE_PROMPT},
+            {
+                "role": "user",
+                "content": PURNE_USER_PROMPT.format(
+                    **asdict(thread.input),
+                    debugging_process=debugging_process,
+                ),
+            },
+        ]
+
+        response = thread.llm.call(
+            messages=input_messages,
+            model=self.bug_info.config.search_model.model,
+            n=self.num_purene_sampling,
+            **self.bug_info.config.search_model.llm_args.asdict(),
+        )
+        input_tokens, output_tokens = self.llm_backend.get_tokens(response)
+        thread.memory.add_cost(output_tokens, input_tokens)
+
+        messages = self.llm_backend.get_msgs(response)
+        purne_scores = []
+        purne_reason = []
+        for message in messages:
+            msg_text = self.llm_backend.get_msg_text(message)
+            purne_reason.append(msg_text)
+            if "YES" in msg_text:
+                purne_scores.append(1)
+            elif "NO" in msg_text:
+                purne_scores.append(0)
+        purne_score = sum(purne_scores) / len(purne_scores)
+        if_prune = True if purne_score < self.purne_threshold else False
+        thread.memory.purne_info = {
+            "purned": if_prune,
+            "purne_score": purne_score,
+            "purne_reason": purne_reason,
+        }
+
+        if if_prune:
+            self.bug_info.logger.debug(
+                f"{self.bug_info.bug_name} "
+                f"- <{thread.input.test_name}> "
+                f"- Process {thread.id} - search path pruned"
+            )
+
+        return if_prune
+
     def run_thread(
         self, thread_id: str, message: ChatCompletionMessage = None
     ) -> None:
@@ -458,6 +530,11 @@ class SearchAgent:
 
         if message:
             self.run_function_calls(thread_id, message)
+
+        if thread.num_function_calls % self.purne_step == 0:
+            # try to prune the search path
+            if self.purne_search_paths(thread_id):
+                return
 
         if thread.num_function_calls >= self.max_tool_calls:
             # if the thread has reached the maximum number of tool calls,

@@ -100,7 +100,8 @@ if __name__ == "__main__":
         # default="config/simple_tools.yml",
         # default="config/simple_tools_paths_6.yml",
         # default="config/simple_tools_v2.yml",
-        default="config/default_new.yml",
+        # default="config/default_new.yml",
+        default="config/default_new_purne.yml",
     )
     parser.add_argument(
         "--processes",
