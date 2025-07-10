@@ -88,20 +88,14 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         help="dataset file",
-        default="dataset/Mockito.csv",
+        # default="dataset/Mockito.csv",
+        default="dataset/all_bugs.csv",
     )
     parser.add_argument(
         "--config",
         type=str,
         help="config file",
-        # default="config/default.yml",
-        # default="config/gpt-4o.yml",
-        # default="config/paths_6.yml",
-        # default="config/simple_tools.yml",
-        # default="config/simple_tools_paths_6.yml",
-        # default="config/simple_tools_v2.yml",
-        # default="config/default_new.yml",
-        default="config/default_new_purne.yml",
+        default="config/default.yml",
     )
     parser.add_argument(
         "--processes",

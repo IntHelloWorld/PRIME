@@ -352,14 +352,6 @@ It failed with the following error message and call stack:
 ```
 """
 
-DEBUGGING_PROMPT_PARALLEL = """You are a Software Debugging Assistant. You will be provided with the test failure information and a set of callable functions to help you debug the issue. Your task is to understand the root cause of the bug step-by-step using the callable functions.
-
-NOTE:
-- Explain your analysis and thoughts before each function call you initiate.
-- You have up to {max_tool_calls} chances to call the functions.
-- If you have understood the root cause, please terminate the debugging session by providing a response without any function call.
-"""
-
 DEBUGGING_PROMPT = """You are a Software Debugging Assistant. You will be provided with the test failure information and a set of callable functions to help you debug the issue. Your task is to understand the root cause of the bug step-by-step using the callable functions.
 
 NOTE:
@@ -368,7 +360,7 @@ NOTE:
 - If you have understood the root cause, please terminate the debugging session by providing a response without any function call.
 """
 
-PURNE_PROMPT = """You are an expert software engineer specializing in debugging and code analysis. Your task is to evaluate the reasoning and actions of a Large Language Model (LLM) agent designed for automated fault localization.
+PRUNE_PROMPT = """You are an expert software engineer specializing in debugging and code analysis. Your task is to evaluate the reasoning and actions of a Large Language Model (LLM) agent designed for automated fault localization.
 You will be given the details of a failed test case and the step-by-step debugging process the agent has taken so far. This process includes the agent's reasoning, the tools it called, and the outputs from those tools.
 Your goal is to determine if the agent is on a promising path to finding the root cause of the bug. You are not judging the final outcome, as the process is incomplete. Instead, you are evaluating the quality and direction of the debugging process itself.
 
@@ -388,7 +380,7 @@ Thoughts: <Your brief thoughts and reasoning process for the decision>
 On the right track to success: "YES" or "NO"
 """
 
-PURNE_USER_PROMPT = """## Test Failure Information
+PRUNE_USER_PROMPT = """## Test Failure Information
 
 The test `{test_name}` failed.
 

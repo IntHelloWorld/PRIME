@@ -393,6 +393,7 @@ def get_ranked(
             )
             result[centrality_type][node] = final_score
 
+    # do not compute the node importance scores if the subgraph is too small
     if subgraph.number_of_nodes() < 20:
         for centrality_type in importance_scores:
             result[centrality_type] = node_frequency
@@ -635,7 +636,8 @@ if __name__ == "__main__":
         # default="config/simple_tools_paths_6.yml",
         # default="config/simple_tools_v2.yml",
         # default="config/default_new.yml",
-        default="config/default_new_purne.yml",
+        # default="config/default_new_prune.yml",
+        default="config/default_path_select_2.yml",
     )
     parser.add_argument(
         "--processes",

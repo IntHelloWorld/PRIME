@@ -49,10 +49,10 @@ class Memory:
         self.retry_msgs = []
         self.model_name = model_name
         self.costs = []
-        self.purne_info = {
-            "purned": False,
-            "purne_score": 1,
-            "purne_reason": [],
+        self.prune_info = {
+            "pruned": False,
+            "prune_score": 1,
+            "prune_reason": [],
         }
 
     def add_message(self, message, type="normal"):
@@ -103,7 +103,7 @@ class Memory:
             "all_in_tokens": sum(c["prompt_tokens"] for c in self.costs),
             "all_out_tokens": sum(c["completion_tokens"] for c in self.costs),
             "money": sum([c["cost"] for c in self.costs]),
-            "purne_info": self.purne_info,
+            "prune_info": self.prune_info,
         }
 
     def to_debug_process(self) -> str:
