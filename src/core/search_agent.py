@@ -290,12 +290,11 @@ class SearchAgent:
     ):
         """
         Remove duplicate tool calls from the messages,
-        and keep a single end message without tool call.
+        and keep up to one end message without tool call.
         """
         seen_tool_calls = set()
         has_end_msg = False  # We only need one message without a tool call
-        tool_msgs = []
-        end_msg = None
+        output_messages = []
         for message in messages:
             tool_call = self.llm_backend.get_tool_call(message)
             if tool_call:
@@ -305,21 +304,19 @@ class SearchAgent:
                     # Skip duplicate tool calls
                     continue
                 seen_tool_calls.add(function_str)
-                tool_msgs.append(message)
+                output_messages.append(message)
             else:
                 if not has_end_msg:
                     # Keep messages without tool calls
-                    end_msg = message
+                    output_messages.append(message)
                     has_end_msg = True
-        return tool_msgs, end_msg
+        return output_messages
 
     def extend_nodes(
-        self,
-        thread_id: int,
-        messages: List[ChatCompletionMessage],
+        self, thread_id: str, messages: List[ChatCompletionMessage]
     ) -> None:
         """Extend the search paths based on the messages."""
-        tool_messages, end_message = self.remove_duplicate_msg(messages)
+        all_messages = self.remove_duplicate_msg(messages)
 
         # check how many paths we can extend
         with self.thread_lock:
@@ -328,46 +325,16 @@ class SearchAgent:
                 # do not create new threads
                 max_parallel = 1
             else:
-                max_new_paths = min(len(tool_messages), self.branch_count) - 1
+                max_new_paths = min(len(all_messages), self.branch_count) - 1
                 max_parallel = (
                     min(max_new_paths, self.max_paths - self.cur_paths) + 1
                 )
             if max_parallel > 1:
                 self.cur_paths += max_parallel - 1
 
-        if self.use_select_path:
-            # we only perform path selection for tool messages
-            # note that we prefer end message by default
-            top_n = max_parallel - 1 if end_message else max_parallel
-            if 0 < top_n < len(tool_messages):
-                selected_indices, selected_embeddings = (
-                    self.path_selector.select_paths(
-                        [str(msg) for msg in tool_messages],
-                        self.path_pool,
-                        top_n=top_n,
-                    )
-                )
-                selected_tool_messages = [
-                    tool_messages[i] for i in selected_indices
-                ]
-                self.path_pool.extend(
-                    list(zip(selected_tool_messages, selected_embeddings))
-                )
-            elif top_n == 0:
-                selected_tool_messages = []
-            else:
-                selected_tool_messages = tool_messages
-                self.path_pool.extend(
-                    self.path_selector.embed_paths(
-                        [str(msg) for msg in tool_messages]
-                    )
-                )
-        else:
-            # if we do not use path selection, we just use all tool messages
-            selected_tool_messages = tool_messages[:max_parallel]
-
         # extend the search paths
-        for message in selected_tool_messages:
+        all_need_extend = True
+        for message in all_messages[:max_parallel]:
             tool_call = self.llm_backend.get_tool_call(message)
 
             if tool_call:
@@ -383,12 +350,93 @@ class SearchAgent:
                 )
                 future.thread_id = new_thread_id
                 self.futures.append(future)
+            else:
+                all_need_extend = False
+                self.run_fault_localization(thread_id, message)
 
-        # terminate the search path
+        # if all paths need to be extended,
+        # remove the parent thread and its futures
+        if all_need_extend:
+            self.remove_thread(thread_id)
+
+    def extend_nodes_with_path_selection(
+        self,
+        thread_id: int,
+        messages: List[ChatCompletionMessage],
+    ) -> None:
+        """Extend the search paths based on the messages."""
+        all_messages = self.remove_duplicate_msg(messages)
+
+        # check how many paths we can extend
+        # max_parallel == 1 : do not create new threads
+        # max_parallel > 1 : create new threads
+        with self.thread_lock:
+            max_parallel = self.branch_count
+            if self.cur_paths >= self.max_paths:
+                max_parallel = 1
+            else:
+                max_new_paths = min(len(all_messages), self.branch_count) - 1
+                max_parallel = (
+                    min(max_new_paths, self.max_paths - self.cur_paths) + 1
+                )
+            if max_parallel > 1:
+                self.cur_paths += max_parallel - 1
+
+        need_tool_messages = []
+        need_end_message = []
+        for message in all_messages[:max_parallel]:
+            tool_call = self.llm_backend.get_tool_call(message)
+            if tool_call:
+                need_tool_messages.append(message)
+            else:
+                need_end_message.append(message)
+
+        top_n = len(need_tool_messages)
+        all_tool_messages = [m for m in all_messages if m.tool_calls]
+        if top_n > 0 and len(all_tool_messages) > top_n:
+            # perform path selection for tool messages
+            selected_indices, selected_embeddings = (
+                self.path_selector.select_paths(
+                    [str(msg) for msg in all_tool_messages],
+                    self.path_pool,
+                    top_n=top_n,
+                )
+            )
+            selected_tool_messages = [
+                all_tool_messages[i] for i in selected_indices
+            ]
+            self.path_pool.extend(
+                list(zip(selected_tool_messages, selected_embeddings))
+            )
+        else:
+            selected_tool_messages = need_tool_messages
+            if need_tool_messages:
+                self.path_pool.extend(
+                    self.path_selector.embed_paths(
+                        [str(msg) for msg in need_tool_messages]
+                    )
+                )
+
         all_need_extend = True
-        if end_message:
-            all_need_extend = False
-            self.run_fault_localization(thread_id, end_message)
+        selected_messages = selected_tool_messages + need_end_message
+        for message in selected_messages:
+            tool_call = self.llm_backend.get_tool_call(message)
+            if tool_call:
+                # create a new thread for each message
+                new_thread_id = self.create_thread(
+                    input=copy.deepcopy(self.threads[thread_id].input),
+                    parent_id=thread_id,
+                )
+                future = self.thread_pool.submit(
+                    self.run_thread,
+                    new_thread_id,
+                    message,
+                )
+                future.thread_id = new_thread_id
+                self.futures.append(future)
+            else:
+                all_need_extend = False
+                self.run_fault_localization(thread_id, message)
 
         # if all paths need to be extended,
         # remove the parent thread and its futures
@@ -608,4 +656,7 @@ class SearchAgent:
             input_tokens, output_tokens = self.llm_backend.get_tokens(response)
             thread.memory.add_cost(output_tokens, input_tokens)
 
-        self.extend_nodes(thread_id, messages)
+        if self.use_select_path:
+            self.extend_nodes_with_path_selection(thread_id, messages)
+        else:
+            self.extend_nodes(thread_id, messages)
