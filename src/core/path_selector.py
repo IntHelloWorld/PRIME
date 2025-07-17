@@ -7,32 +7,53 @@ import requests
 class PathSelector:
     def __init__(self, org, model, api_key, base_url):
         self.org = org
-        if org != "jinaai":
-            raise ValueError(
-                "Only 'jinaai' organization is supported for now."
-            )
+        assert org in [
+            "jinaai",
+            "vllm",
+        ], "Unsupported organization. Use 'jinaai' or 'vllm'."
         self.model = model
         self.api_key = api_key
         self.base_url = base_url
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
-        }
 
     def _embed_texts(self, texts: List[str]) -> List[List[float]]:
         """
         Embed a list of text strings using Jina API.
         """
         data = {
-            "model": "jina-embeddings-v4",
+            "model": self.model,
             "task": "text-matching",
             "input": [{"text": text} for text in texts],
         }
 
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
         try:
-            response = requests.post(
-                self.base_url, headers=self.headers, json=data
-            )
+            response = requests.post(self.base_url, headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+
+            # Extract embeddings from response
+            embeddings = []
+            for item in result.get("data", []):
+                embeddings.append(item.get("embedding", []))
+            return embeddings
+        except Exception as e:
+            raise RuntimeError(f"Error embedding texts: {e}") from e
+
+    def _embed_texts_vllm(self, texts: List[str]) -> List[List[float]]:
+        """
+        Embed a list of text strings using local deployed VLLM model.
+        """
+        data = {
+            "model": self.model,
+            "input": texts,
+        }
+
+        try:
+            response = requests.post(self.base_url, json=data, timeout=20)
             response.raise_for_status()
             result = response.json()
 
@@ -91,7 +112,10 @@ class PathSelector:
             raise ValueError("Input paths list cannot be empty.")
 
         # Embed all input paths
-        path_embeddings = self._embed_texts(paths)
+        if self.org == "jinaai":
+            path_embeddings = self._embed_texts(paths)
+        else:
+            path_embeddings = self._embed_texts_vllm(paths)
 
         # Return paths with their embeddings
         return list(zip(paths, path_embeddings))
@@ -118,7 +142,10 @@ class PathSelector:
             raise ValueError("Input paths list cannot be empty.")
 
         # Embed all input paths
-        path_embeddings = self._embed_texts(paths)
+        if self.org == "jinaai":
+            path_embeddings = self._embed_texts(paths)
+        else:
+            path_embeddings = self._embed_texts_vllm(paths)
 
         # Calculate distinctness scores (minimum similarity with existing paths)
         distinctness_scores = []
