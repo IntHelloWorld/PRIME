@@ -346,10 +346,10 @@ def get_ranked(
 
     ranked_result_file = bug_info.res_path / "method_rank_list.json"
     # TODO: uncomment this to use cached results
-    # if ranked_result_file.exists():
-    #     with ranked_result_file.open("r") as f:
-    #         ranked_methods = json.load(f)
-    #         return ranked_methods, call_graph
+    if ranked_result_file.exists():
+        with ranked_result_file.open("r") as f:
+            ranked_methods = json.load(f)
+            return ranked_methods, call_graph
 
     debug_result_file = bug_info.res_path / "debug_result.json"
     all_pred_method_nodes, node_frequency = parse_debug_result(
@@ -423,6 +423,50 @@ def get_ranked(
     return ranked_methods, call_graph
 
 
+def get_ranked_raw(bug_info: BugInfo, combined_graph: nx.MultiDiGraph):
+    """
+    Get the ranked methods from the combined graph.
+    """
+
+    # solve the combined_graph, only keep the 'calls', 'may_calls' edges and the 'function' nodes
+    call_graph = nx.MultiDiGraph()
+    id_dict = {}
+    for node in combined_graph.nodes(data=True):
+        if node[0].category == "function":
+            id_dict[node[0].method_id] = node[0]
+            call_graph.add_node(node[0])
+
+    for edge in combined_graph.edges(data=True):
+        if edge[2]["rel"] in ["calls", "may_calls"]:
+            if (
+                edge[0].category == "function"
+                and edge[1].category == "function"
+            ):
+                call_graph.add_edge(edge[0], edge[1], rel=edge[2]["rel"])
+    print_graph_info(call_graph, "Call Graph")
+
+    ranked_result_file = bug_info.res_path / "method_rank_list_raw.json"
+    # TODO: uncomment this to use cached results
+    if ranked_result_file.exists():
+        with ranked_result_file.open("r") as f:
+            ranked_methods = json.load(f)
+            return ranked_methods, call_graph
+
+    debug_result_file = bug_info.res_path / "debug_result.json"
+    all_pred_method_nodes, node_frequency = parse_debug_result(
+        debug_result_file, call_graph, id_dict
+    )
+
+    method_list = [asdict(m) for m in all_pred_method_nodes]
+    ranked_methods = {
+        "frequency": method_list,
+    }
+
+    with ranked_result_file.open("w") as f:
+        json.dump(ranked_methods, f, indent=4)
+    return ranked_methods, call_graph
+
+
 def min_max_normalize(node_dict: dict) -> dict:
     """Normalize the node dictionary using min-max scaling."""
     min_value = min(node_dict.values())
@@ -489,16 +533,19 @@ def print_graph_info(graph: nx.MultiDiGraph, desc: str = ""):
     print(f"Number of edges: {graph.number_of_edges()}")
 
 
-def evaluate(project, bugID, config):
+def evaluate(project, bugID, config, use_raw):
     args = Namespace(project=project, bugID=bugID, config=config)
     bug_info = BugInfo(args, eval=True)
     result_path: Path = bug_info.evaluation_path / Path(config).stem
     if not result_path.exists():
         result_path.mkdir(parents=True, exist_ok=True)
-    result_file = result_path / f"{project}-{bugID}.json"
+    if use_raw:
+        result_file = result_path / f"{project}-{bugID}_raw.json"
+    else:
+        result_file = result_path / f"{project}-{bugID}.json"
     # TODO: uncomment this to use cached results
-    # if result_file.exists():
-    #     return
+    if result_file.exists():
+        return
 
     print(f"Evaluating {project}-{bugID}")
     # collect basic bug information from cache
@@ -511,7 +558,10 @@ def evaluate(project, bugID, config):
         combined_graph = pickle.load(f)
 
     # combine the result for all test cases to get the ranked methods
-    ranked_methods, call_graph = get_ranked(bug_info, combined_graph)
+    if use_raw:
+        ranked_methods, call_graph = get_ranked_raw(bug_info, combined_graph)
+    else:
+        ranked_methods, call_graph = get_ranked(bug_info, combined_graph)
 
     # get the distance between the ranked methods and the buggy methods
     distances = get_distance(test_failure_obj, ranked_methods, call_graph)
@@ -519,19 +569,27 @@ def evaluate(project, bugID, config):
         json.dump(distances, f, indent=4)
 
 
-def print_result(bug_names, config_file):
+def print_result(bug_names, config_file, use_raw):
     root_path = Path(__file__).resolve().parent
     config_name = Path(config_file).stem
     output = {}
     top_5_bugs = []
     for bug_name in bug_names:
         proj, bug_id = bug_name.split("_")
-        distance_file = (
-            root_path
-            / "EvaluationResult"
-            / config_name
-            / f"{proj}-{bug_id}.json"
-        )
+        if use_raw:
+            distance_file = (
+                root_path
+                / "EvaluationResult"
+                / config_name
+                / f"{proj}-{bug_id}_raw.json"
+            )
+        else:
+            distance_file = (
+                root_path
+                / "EvaluationResult"
+                / config_name
+                / f"{proj}-{bug_id}.json"
+            )
         if not distance_file.exists():
             raise FileNotFoundError(f"{distance_file} not found, please check")
         with distance_file.open("r") as f:
@@ -540,6 +598,15 @@ def print_result(bug_names, config_file):
         for score_type in distance:
             if score_type not in output:
                 output[score_type] = {}
+                output[score_type]["all"] = {
+                    "Top-1": 0,
+                    "Top-3": 0,
+                    "Top-5": 0,
+                    "Top-10": 0,
+                    "RD@1": [],
+                    "RD@3": [],
+                    "RD@5": [],
+                }
 
             if proj not in output[score_type]:
                 output[score_type][proj] = {
@@ -555,13 +622,17 @@ def print_result(bug_names, config_file):
                 if d == 1.0:
                     if idx == 0:
                         output[score_type][proj]["Top-1"] += 1
+                        output[score_type]["all"]["Top-1"] += 1
                     if idx < 3:
                         output[score_type][proj]["Top-3"] += 1
+                        output[score_type]["all"]["Top-3"] += 1
                     if idx < 5:
                         output[score_type][proj]["Top-5"] += 1
+                        output[score_type]["all"]["Top-5"] += 1
                         top_5_bugs.append(f"{proj}-{bug_id}")
                     if idx < 10:
                         output[score_type][proj]["Top-10"] += 1
+                        output[score_type]["all"]["Top-10"] += 1
                     break
             for i in [1, 3, 5]:
                 if distance[score_type][:i]:
@@ -585,7 +656,7 @@ def print_result(bug_names, config_file):
     pprint(output)
 
 
-def main(dataset_file, config_file, processes):
+def main(dataset_file, config_file, processes, use_raw):
     df = pd.read_csv(dataset_file, header=None)
     bug_names = df.iloc[:, 0].tolist()
 
@@ -598,7 +669,7 @@ def main(dataset_file, config_file, processes):
             for bug_name in bug_names:
                 proj, bug_id = bug_name.split("_")
                 async_result = pool.apply_async(
-                    evaluate, (proj, bug_id, config_file)
+                    evaluate, (proj, bug_id, config_file, use_raw)
                 )
                 async_results.append(async_result)
 
@@ -611,9 +682,9 @@ def main(dataset_file, config_file, processes):
     else:
         for bug_name in bug_names:
             proj, bug_id = bug_name.split("_")
-            evaluate(proj, bug_id, config_file)
+            evaluate(proj, bug_id, config_file, use_raw)
 
-    print_result(bug_names, config_file)
+    print_result(bug_names, config_file, use_raw)
 
 
 if __name__ == "__main__":
@@ -623,21 +694,18 @@ if __name__ == "__main__":
         type=str,
         help="dataset file",
         # default="dataset/JacksonDatabind.csv",
-        default="dataset/Mockito.csv",
+        # default="dataset/Mockito.csv",
+        # default="dataset/Time.csv",
+        default="dataset/all_bugs.csv",
     )
     parser.add_argument(
         "--config",
         type=str,
         help="config file",
-        # default="config/default-2.yml",
-        # default="config/gpt-4o.yml",
-        # default="config/paths_6.yml",
-        # default="config/simple_tools.yml",
-        # default="config/simple_tools_paths_6.yml",
-        # default="config/simple_tools_v2.yml",
-        # default="config/default_new.yml",
-        # default="config/default_new_prune.yml",
-        default="config/default_path_select_2.yml",
+        # default="config/default.yml",
+        default="config/default_path6.yml",
+        # default="config/default_path_select.yml",
+        # default="config/default_path_select_path6.yml",
     )
     parser.add_argument(
         "--processes",
@@ -645,5 +713,11 @@ if __name__ == "__main__":
         help="processes",
         default=10,
     )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        default=False,
+        help="use raw ranked methods",
+    )
     args = parser.parse_args()
-    main(args.dataset, args.config, args.processes)
+    main(args.dataset, args.config, args.processes, args.raw)
