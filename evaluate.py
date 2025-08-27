@@ -401,6 +401,12 @@ def get_ranked(
     # add the frequency score to the result
     result["frequency"] = node_frequency
 
+    # add only-beteweenness to the result
+    if "betweenness_centrality" in importance_scores:
+        result["only_betweenness"] = importance_scores[
+            "betweenness_centrality"
+        ]
+
     ranked_methods = {}
     for centrality_type in result:
         ranked_methods[centrality_type] = []
@@ -650,6 +656,7 @@ def print_result(bug_names, config_file, use_raw):
                 )
 
     top_5_file = root_path / "utils" / f"{config_name}_top_5_bugs.txt"
+    top_5_bugs = list(set(top_5_bugs))
     with open(top_5_file, "w") as f:
         f.write("\n".join(top_5_bugs))
 
@@ -693,19 +700,19 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         help="dataset file",
-        # default="dataset/JacksonDatabind.csv",
-        # default="dataset/Mockito.csv",
-        # default="dataset/Time.csv",
         default="dataset/all_bugs.csv",
     )
     parser.add_argument(
         "--config",
         type=str,
         help="config file",
-        # default="config/default.yml",
-        default="config/default_path6.yml",
-        # default="config/default_path_select.yml",
+        default="config/default.yml",
+        # default="config/default_path_select_path2.yml",
         # default="config/default_path_select_path6.yml",
+        # default="config/default_path_select_path8.yml",
+        # default="config/default_path_select_branch3.yml",
+        # default="config/default_path_select_branch4.yml",
+        # default="config/default_path_select_branch5.yml",
     )
     parser.add_argument(
         "--processes",

@@ -1,0 +1,3 @@
+dependencies:
+  java_agent_lib: /disk2/qyh/TreeFL/MethodCallGraphBuilder/target/MethodCallGraphBuilder-1.0.jar
+  bug_exec: /home/qyh/DATASET/defects4j-2.0.1/framework/bin/defects4j

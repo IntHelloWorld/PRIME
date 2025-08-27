@@ -1,0 +1,35 @@
+dependencies:
+  java_agent_lib: /disk2/qyh/TreeFL/MethodCallGraphBuilder/target/MethodCallGraphBuilder-1.0.jar
+  bug_exec: /home/qyh/DATASET/defects4j-2.0.1/framework/bin/defects4j
+search_model:
+  org: openai
+  model: gpt-4.1-mini-2025-04-14
+  api_key:
+  base_url:
+  llm_args:
+    temperature: 1.2
+embedding_model:
+  org: vllm
+  model: jina-embeddings-v4
+  api_key: None
+  base_url: http://localhost:7100/v1/embeddings
+hyper:
+  debug_workers: 5
+  search_workers: 10
+  max_test_cases: 5
+  max_tool_calls: 20
+  branch_count: 1
+  num_branch_sampling: 1
+  max_search_paths: 1
+  prune_step: 5
+  prune_threshold: 0.5
+  num_prune_sampling: 3
+  use_ablation: false
+  thought: true
+  use_select_path: false
+  use_prune: false
+ablation:
+  test_code: false
+  test_output: false
+  stack_trace: false
+  suspected_issue: false

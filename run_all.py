@@ -89,19 +89,26 @@ if __name__ == "__main__":
         type=str,
         help="dataset file",
         # default="dataset/Mockito.csv",
+        # default="dataset/Time.csv",
         default="dataset/all_bugs.csv",
     )
     parser.add_argument(
         "--config",
         type=str,
         help="config file",
-        default="config/default.yml",
+        # default="config/default.yml",
+        # default="config/default_path_select_path2.yml",
+        # default="config/default_path_select_path6.yml",
+        # default="config/default_path_select_path8.yml",
+        # default="config/default_path_select_branch3.yml",
+        # default="config/default_path_select_branch4.yml",
+        default="config/default_path_select_branch5.yml",
     )
     parser.add_argument(
         "--processes",
         type=int,
         help="processes",
-        default=12,
+        default=4,
     )
     args = parser.parse_args()
     main(args.dataset, args.config, args.processes)

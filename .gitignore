@@ -5,5 +5,5 @@ EvaluationResult
 .vscode
 utils
 test
-config
+config_old
 __pycache__/
